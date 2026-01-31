@@ -1,0 +1,66 @@
+# Basic NuGet OIDC Publishing Workflow
+#
+# This workflow publishes NuGet packages to NuGet.org using OIDC Trusted Publishing.
+# Uses NuGet/login@v1 to exchange GitHub OIDC token for a short-lived API key.
+#
+# Prerequisites:
+# 1. Configure Trusted Publishing on NuGet.org for this repository
+# 2. Update the 'user' field below with your NuGet.org username
+# 3. Ensure your .csproj has proper package metadata
+
+name: Publish NuGet Package
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0, v0.3.0-beta
+  release:
+    types: [published]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    # REQUIRED: These permissions enable OIDC token authentication
+    permissions:
+      id-token: write  # Required for trusted publishing (GitHub OIDC token)
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
+      - name: Pack NuGet package
+        run: dotnet pack --configuration Release --no-build --output ./nupkg
+
+      - name: List generated packages
+        run: ls -la ./nupkg/
+
+      # OIDC: Exchange GitHub token for short-lived NuGet API key
+      - name: NuGet login (OIDC → temp API key)
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: YOUR_NUGET_USERNAME  # Your nuget.org username (profile name), NOT email
+
+      - name: Publish to NuGet.org (Trusted Publishing)
+        run: |
+          dotnet nuget push ./nupkg/*.nupkg \
+            --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

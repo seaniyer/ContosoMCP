@@ -1,0 +1,99 @@
+# NuGet OIDC Publishing with GitHub Environments
+#
+# This workflow uses GitHub Environments to add approval gates
+# and additional security controls before publishing to NuGet.org.
+#
+# Setup Required:
+# 1. Create 'nuget-production' environment in repository settings
+# 2. Add required reviewers to the environment (optional)
+# 3. Configure Trusted Publishing on NuGet.org with environment name
+# 4. Update the 'user' field below with your NuGet.org username
+
+name: Publish NuGet Package (with Environment)
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
+      - name: Pack NuGet packages
+        run: dotnet pack --configuration Release --no-build --output ./nupkg
+
+      - name: Upload packages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./nupkg/*
+          retention-days: 7
+
+  publish:
+    name: Publish to NuGet.org
+    needs: build
+    runs-on: ubuntu-latest
+
+    # REQUIRED: These permissions enable OIDC token authentication
+    permissions:
+      id-token: write  # Required for trusted publishing (GitHub OIDC token)
+      contents: read
+
+    # IMPORTANT: Environment name must match what's configured on NuGet.org
+    # Configure this environment in: Repository Settings > Environments
+    environment:
+      name: nuget-production
+      url: https://www.nuget.org/packages/YOUR_PACKAGE_NAME
+    
+    steps:
+      - name: Download packages artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./nupkg
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: List packages to publish
+        run: ls -la ./nupkg/
+
+      # OIDC: Exchange GitHub token for short-lived NuGet API key
+      # When using environments, the environment name is part of the OIDC claim
+      - name: NuGet login (OIDC → temp API key)
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: YOUR_NUGET_USERNAME  # Your nuget.org username (profile name), NOT email
+
+      - name: Publish to NuGet.org (Trusted Publishing)
+        run: |
+          dotnet nuget push ./nupkg/*.nupkg \
+            --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

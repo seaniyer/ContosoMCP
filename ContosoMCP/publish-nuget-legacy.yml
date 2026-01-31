@@ -1,4 +1,4 @@
-name: Publish NuGet Package
+name: Publish NuGet Package (Legacy API Key)
 
 on:
   push:
@@ -8,12 +8,18 @@ on:
     types: [published]
   workflow_dispatch:  # Allow manual trigger
 
+# NOTE: This workflow uses the legacy API key approach.
+# You must create a repository secret named NUGET_API_KEY with your NuGet.org API key.
+# To create an API key: https://www.nuget.org/account/apikeys
+
+env:
+  NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+
 jobs:
   publish:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write  # Required for trusted publishing (GitHub OIDC token)
       contents: read
 
     steps:
@@ -34,16 +40,9 @@ jobs:
       - name: Pack
         run: dotnet pack ContosoMCP/ContosoMCP.csproj --configuration Release --no-build --output ./nupkg
 
-      - name: NuGet login (OIDC ? temp API key)
-        uses: NuGet/login@v1
-        id: nuget-login
-        with:
-          user: seaniyer  # Your nuget.org username (profile name), NOT email
-
-      - name: Publish to NuGet.org (Trusted Publishing)
+      - name: Publish to NuGet.org (Legacy API Key)
         run: |
           dotnet nuget push ./nupkg/*.nupkg \
-            --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} \
+            --api-key ${{ env.NUGET_API_KEY }} \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
-        

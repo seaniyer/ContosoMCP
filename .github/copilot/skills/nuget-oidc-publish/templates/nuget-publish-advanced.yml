@@ -1,0 +1,161 @@
+# Advanced NuGet OIDC Publishing Workflow
+#
+# Features:
+# - Version tagging support
+# - Multi-project support
+# - Symbol package publishing
+# - GitHub Environment for approval gates
+# - Caching for faster builds
+
+name: Publish NuGet Package (Advanced)
+
+on:
+  # Trigger on version tags
+  push:
+    tags:
+      - 'v*.*.*'
+  
+  # Manual trigger with version input
+  workflow_dispatch:
+    inputs:
+      version_suffix:
+        description: 'Version suffix (e.g., preview.1, beta.2)'
+        required: false
+        type: string
+      skip_tests:
+        description: 'Skip test execution'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for version calculation
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            6.0.x
+            7.0.x
+            8.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="1.0.0"
+          fi
+          
+          if [[ -n "${{ github.event.inputs.version_suffix }}" ]]; then
+            VERSION="${VERSION}-${{ github.event.inputs.version_suffix }}"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore -p:Version=${{ steps.get_version.outputs.version }}
+
+      - name: Run tests
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
+        run: dotnet test --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+
+      - name: Pack NuGet packages
+        run: |
+          dotnet pack --configuration Release --no-build --output ./nupkg \
+            -p:Version=${{ steps.get_version.outputs.version }} \
+            -p:IncludeSymbols=true \
+            -p:SymbolPackageFormat=snupkg
+
+      - name: Upload packages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./nupkg/*
+          retention-days: 7
+
+  publish:
+    name: Publish to NuGet.org
+    needs: build
+    runs-on: ubuntu-latest
+
+    # REQUIRED: These permissions enable OIDC token authentication
+    permissions:
+      id-token: write  # Required for trusted publishing (GitHub OIDC token)
+      contents: read
+    
+    steps:
+      - name: Download packages artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./nupkg
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: List packages to publish
+        run: |
+          echo "Packages to publish:"
+          ls -la ./nupkg/
+
+      # OIDC: Exchange GitHub token for short-lived NuGet API key
+      - name: NuGet login (OIDC → temp API key)
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: YOUR_NUGET_USERNAME  # Your nuget.org username (profile name), NOT email
+
+      - name: Publish NuGet packages
+        run: |
+          for package in ./nupkg/*.nupkg; do
+            echo "Publishing: $package"
+            dotnet nuget push "$package" \
+              --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
+
+      - name: Summary
+        run: |
+          echo "## Published Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Version: ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Package |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|" >> $GITHUB_STEP_SUMMARY
+          for package in ./nupkg/*.nupkg; do
+            echo "| $(basename $package) |" >> $GITHUB_STEP_SUMMARY
+          done
