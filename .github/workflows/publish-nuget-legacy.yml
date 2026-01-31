@@ -12,7 +12,7 @@ jobs:
 	publish:
 		runs-on: ubuntu-latest
 
-		# Legacy flow uses repository secret NUGET_API_KEY (not recommended).
+		# Legacy flow uses repository secret NUGET_USER (not recommended).
 		permissions:
 			contents: read
 
@@ -40,17 +40,17 @@ jobs:
 			- name: List generated packages
 				run: ls -la ./nupkg/
 
-			- name: Validate NuGet API key secret
-				if: ${{ secrets.NUGET_API_KEY == '' }}
+			- name: Validate NuGet secret
+				if: ${{ secrets.NUGET_USER == '' }}
 				run: |
-					echo "NUGET_API_KEY secret is not configured. Add it in Repository Settings > Secrets and variables > Actions." \
+					echo "NUGET_USER secret is not configured. Add it in Repository Settings > Secrets and variables > Actions." \
 					&& exit 1
 
-			- name: Publish to NuGet.org (Legacy API Key)
+			- name: Publish to NuGet.org (Legacy Secret)
 				env:
-					NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+					NUGET_USER: ${{ secrets.NUGET_USER }}
 				run: |
 					dotnet nuget push ./nupkg/*.nupkg \
-						--api-key "$NUGET_API_KEY" \
+						--api-key "$NUGET_USER" \
 						--source https://api.nuget.org/v3/index.json \
 						--skip-duplicate
