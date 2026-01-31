@@ -1,51 +1,56 @@
-name: Publish NuGet Package (OIDC Trusted Publishing)
+name: Publish NuGet Package (Legacy API Key)
 
 on:
-  push:
-    tags:
-      - 'v*'  # Trigger on version tags like v0.3.0-beta
-  release:
-    types: [published]
-  workflow_dispatch:  # Allow manual trigger
-
-# NOTE: This workflow uses OIDC Trusted Publishing - no long-lived API keys required.
-# Configure Trusted Publishing on NuGet.org: https://learn.microsoft.com/nuget/nuget-org/trusted-publishing
+	push:
+		tags:
+			- 'v*'  # Trigger on version tags like v1.0.0, v0.3.0-beta
+	release:
+		types: [published]
+	workflow_dispatch:  # Allow manual trigger
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+	publish:
+		runs-on: ubuntu-latest
 
-    permissions:
-      id-token: write  # Required for OIDC token authentication with NuGet.org
-      contents: read
+		# Legacy flow uses repository secret NUGET_API_KEY (not recommended).
+		permissions:
+			contents: read
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+		steps:
+			- name: Checkout repository
+				uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+			- name: Setup .NET
+				uses: actions/setup-dotnet@v4
+				with:
+					dotnet-version: '8.0.x'
 
-      - name: Restore dependencies
-        run: dotnet restore ContosoMCP/ContosoMCP.csproj
+			- name: Restore dependencies
+				run: dotnet restore ContosoMCP/ContosoMCP.csproj
 
-      - name: Build
-        run: dotnet build ContosoMCP/ContosoMCP.csproj --configuration Release --no-restore
+			- name: Build
+				run: dotnet build ContosoMCP/ContosoMCP.csproj --configuration Release --no-restore
 
-      - name: Pack
-        run: dotnet pack ContosoMCP/ContosoMCP.csproj --configuration Release --no-build --output ./nupkg
+			- name: Run tests
+				run: dotnet test --configuration Release --no-build --verbosity normal
 
-      - name: NuGet login (OIDC → temp API key)
-        uses: NuGet/login@v1
-        id: nuget-login
-        with:
-          user: YOUR_NUGET_USERNAME  # Replace with your nuget.org profile name (NOT email)
+			- name: Pack NuGet package
+				run: dotnet pack ContosoMCP/ContosoMCP.csproj --configuration Release --no-build --output ./nupkg
 
-      - name: Publish to NuGet.org (Trusted Publishing)
-        run: |
-          dotnet nuget push ./nupkg/*.nupkg \
-            --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+			- name: List generated packages
+				run: ls -la ./nupkg/
+
+			- name: Validate NuGet API key secret
+				if: ${{ secrets.NUGET_API_KEY == '' }}
+				run: |
+					echo "NUGET_API_KEY secret is not configured. Add it in Repository Settings > Secrets and variables > Actions." \
+					&& exit 1
+
+			- name: Publish to NuGet.org (Legacy API Key)
+				env:
+					NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+				run: |
+					dotnet nuget push ./nupkg/*.nupkg \
+						--api-key "$NUGET_API_KEY" \
+						--source https://api.nuget.org/v3/index.json \
+						--skip-duplicate
